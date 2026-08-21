@@ -31,7 +31,6 @@ async def startup_event():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable is missing!")
 
-    # Ensure URI starts with postgresql:// for asyncpg driver
     formatted_db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     
     # Lightweight MobileNetV3 Small (Under 20MB RAM)
@@ -41,18 +40,19 @@ async def startup_event():
     model = base_model
     preprocess = weights.transforms()
     
-    # Linear projection to reduce output dimension to 512 for pgvector(512)
+    # Linear projection to 512 dimensions for pgvector(512)
     torch.manual_seed(42)
     projection = nn.Linear(576, 512)
     projection.eval()
 
-    # Create connection pool WITH ssl="require" for Supabase
+    # Disable statement caching to make asyncpg compatible with Supabase PgBouncer (Port 6543)
     try:
         db_pool = await asyncpg.create_pool(
             dsn=formatted_db_url,
             ssl="require",
             min_size=1,
-            max_size=5
+            max_size=5,
+            statement_cache_size=0
         )
     except Exception as e:
         print(f"Failed to connect to Supabase: {e}")
