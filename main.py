@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import torch
 import torch.nn as nn
-import torchvision.transforms as T
 import torchvision.models as models
 
 app = FastAPI(title="Surgical Visual Search API")
@@ -23,7 +22,6 @@ preprocess = None
 projection = None
 db_pool = None
 
-# Grab database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 @app.on_event("startup")
@@ -33,23 +31,32 @@ async def startup_event():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable is missing!")
 
-    # Fix postgres:// prefix for asyncpg compatibility
+    # Ensure URI starts with postgresql:// for asyncpg driver
     formatted_db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     
-    # Lightweight MobileNetV3 Small (Memory efficient)
+    # Lightweight MobileNetV3 Small (Under 20MB RAM)
     weights = models.MobileNet_V3_Small_Weights.DEFAULT
     base_model = models.mobilenet_v3_small(weights=weights)
     base_model.eval()
     model = base_model
     preprocess = weights.transforms()
     
-    # Linear projection to reduce output dimension from 576 to exact 512 to match pgvector(512)
-    torch.manual_seed(42)  # Fixed seed for consistent projection weights
+    # Linear projection to reduce output dimension to 512 for pgvector(512)
+    torch.manual_seed(42)
     projection = nn.Linear(576, 512)
     projection.eval()
 
-    # Connect to database pool
-    db_pool = await asyncpg.create_pool(formatted_db_url)
+    # Create connection pool WITH ssl="require" for Supabase
+    try:
+        db_pool = await asyncpg.create_pool(
+            dsn=formatted_db_url,
+            ssl="require",
+            min_size=1,
+            max_size=5
+        )
+    except Exception as e:
+        print(f"Failed to connect to Supabase: {e}")
+        raise e
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -64,9 +71,7 @@ def generate_image_embedding(image_bytes: bytes) -> list[float]:
         features = model.features(processed_img)
         features = model.avgpool(features)
         features = torch.flatten(features, 1)
-        # Project 576 features down to 512 dimensions
         features_512 = projection(features)
-        # Normalize vector
         features_512 /= features_512.norm(dim=-1, keepdim=True)
     
     return features_512.cpu().numpy().flatten().tolist()
