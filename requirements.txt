@@ -1,9 +1,10 @@
---extra-index-url https://download.pytorch.org/whl/cpu
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
 fastapi>=0.110.0
 uvicorn>=0.28.0
 asyncpg>=0.29.0
 pillow>=10.3.0
-torch==2.2.1+cpu
-torchvision==0.17.1+cpu
+torch
+torchvision
 open_clip_torch>=2.24.0
 python-multipart>=0.0.9
