@@ -1,6 +1,7 @@
 import io
 import os
 import asyncpg
+from urllib.parse import urlparse, unquote
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -31,24 +32,37 @@ async def startup_event():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable is missing!")
 
-    formatted_db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    # Format URL safely for asyncpg
+    raw_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    parsed = urlparse(raw_url)
     
-    # Lightweight MobileNetV3 Small (Under 20MB RAM)
+    # Extract connection components cleanly
+    user = parsed.username
+    password = unquote(parsed.password) if parsed.password else None
+    host = parsed.hostname
+    port = parsed.port or 5432
+    database = parsed.path.lstrip('/') or 'postgres'
+
+    # Lightweight MobileNetV3 Small
     weights = models.MobileNet_V3_Small_Weights.DEFAULT
     base_model = models.mobilenet_v3_small(weights=weights)
     base_model.eval()
     model = base_model
     preprocess = weights.transforms()
     
-    # Linear projection to 512 dimensions for pgvector(512)
+    # 512-dimension projection
     torch.manual_seed(42)
     projection = nn.Linear(576, 512)
     projection.eval()
 
-    # Disable statement caching to make asyncpg compatible with Supabase PgBouncer (Port 6543)
+    # Create connection pool using explicit connection parameters
     try:
         db_pool = await asyncpg.create_pool(
-            dsn=formatted_db_url,
+            user=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
             ssl="require",
             min_size=1,
             max_size=5,
