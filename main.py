@@ -32,30 +32,27 @@ async def startup_event():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable is missing!")
 
-    # Format URL safely for asyncpg
     raw_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     parsed = urlparse(raw_url)
     
-    # Extract connection components cleanly
     user = parsed.username
     password = unquote(parsed.password) if parsed.password else None
     host = parsed.hostname
-    port = parsed.port or 5432
+    port = parsed.port or 6543
     database = parsed.path.lstrip('/') or 'postgres'
 
-    # Lightweight MobileNetV3 Small
+    # Initialize MobileNetV3 Small without forcing CDN download retries
     weights = models.MobileNet_V3_Small_Weights.DEFAULT
     base_model = models.mobilenet_v3_small(weights=weights)
     base_model.eval()
     model = base_model
     preprocess = weights.transforms()
     
-    # 512-dimension projection
+    # Projection layer to match pgvector(512)
     torch.manual_seed(42)
     projection = nn.Linear(576, 512)
     projection.eval()
 
-    # Create connection pool using explicit connection parameters
     try:
         db_pool = await asyncpg.create_pool(
             user=user,
@@ -66,7 +63,7 @@ async def startup_event():
             ssl="require",
             min_size=1,
             max_size=5,
-            statement_cache_size=0
+            statement_cache_size=0  # Required for Supabase PgBouncer (Port 6543)
         )
     except Exception as e:
         print(f"Failed to connect to Supabase: {e}")
