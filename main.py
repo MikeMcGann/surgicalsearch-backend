@@ -5,6 +5,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import torch
+import torch.nn as nn
 import torchvision.transforms as T
 import torchvision.models as models
 
@@ -19,26 +20,36 @@ app.add_middleware(
 
 model = None
 preprocess = None
+projection = None
 db_pool = None
 
+# Grab database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 @app.on_event("startup")
 async def startup_event():
-    global model, preprocess, db_pool
-    
-    # Use lightweight MobileNetV3 (uses < 20MB RAM vs 350MB+ for OpenCLIP)
-    weights = models.MobileNet_V3_Small_Weights.DEFAULT
-    model = models.mobilenet_v3_small(weights=weights)
-    model.eval()
-    
-    # Standard image pre-processing pipeline
-    preprocess = weights.transforms()
+    global model, preprocess, projection, db_pool
     
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable is missing!")
-        
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+
+    # Fix postgres:// prefix for asyncpg compatibility
+    formatted_db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    
+    # Lightweight MobileNetV3 Small (Memory efficient)
+    weights = models.MobileNet_V3_Small_Weights.DEFAULT
+    base_model = models.mobilenet_v3_small(weights=weights)
+    base_model.eval()
+    model = base_model
+    preprocess = weights.transforms()
+    
+    # Linear projection to reduce output dimension from 576 to exact 512 to match pgvector(512)
+    torch.manual_seed(42)  # Fixed seed for consistent projection weights
+    projection = nn.Linear(576, 512)
+    projection.eval()
+
+    # Connect to database pool
+    db_pool = await asyncpg.create_pool(formatted_db_url)
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -50,14 +61,15 @@ def generate_image_embedding(image_bytes: bytes) -> list[float]:
     processed_img = preprocess(image).unsqueeze(0)
     
     with torch.no_grad():
-        # Extract features from classification backbone
         features = model.features(processed_img)
         features = model.avgpool(features)
         features = torch.flatten(features, 1)
-        # Normalize the feature vector
-        features /= features.norm(dim=-1, keepdim=True)
+        # Project 576 features down to 512 dimensions
+        features_512 = projection(features)
+        # Normalize vector
+        features_512 /= features_512.norm(dim=-1, keepdim=True)
     
-    return features.cpu().numpy().flatten().tolist()
+    return features_512.cpu().numpy().flatten().tolist()
 
 @app.post("/api/search-visual")
 async def search_visual(file: UploadFile = File(...)):
