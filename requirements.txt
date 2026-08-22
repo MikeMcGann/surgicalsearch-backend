@@ -12,3 +12,4 @@ ftfy
 regex
 tqdm
 asyncpg
+pdfplumber
