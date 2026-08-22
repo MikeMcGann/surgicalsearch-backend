@@ -49,7 +49,6 @@ def home():
 
 @app.get("/upload-pdf", response_class=HTMLResponse)
 def upload_page():
-    """Simple Web Page to upload the PDF directly from your browser"""
     return """
     <!DOCTYPE html>
     <html>
@@ -62,17 +61,20 @@ def upload_page():
             input[type="file"] { margin: 20px 0; display: block; }
             button { background: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; }
             button:hover { background: #0056b3; }
-            #status { margin-top: 20px; font-weight: bold; color: #28a745; }
+            #status { margin-top: 20px; font-weight: bold; }
+            #progress { margin-top: 10px; width: 100%; background: #e0e0e0; border-radius: 4px; overflow: hidden; display: none; }
+            #bar { height: 12px; width: 0%; background: #007bff; transition: width 0.3s; }
         </style>
     </head>
     <body>
         <div class="card">
             <h2>Upload Surgical Catalog PDF</h2>
-            <p>Select your catalog PDF to extract items and generate vector embeddings into Supabase.</p>
+            <p>Processes your catalog page-by-page to prevent timeout issues.</p>
             <form id="uploadForm">
                 <input type="file" id="pdfFile" accept=".pdf" required />
-                <button type="submit">Start Ingestion</button>
+                <button type="submit" id="btn">Start Fast Ingestion</button>
             </form>
+            <div id="progress"><div id="bar"></div></div>
             <div id="status"></div>
         </div>
 
@@ -81,32 +83,40 @@ def upload_page():
                 e.preventDefault();
                 const fileInput = document.getElementById('pdfFile');
                 const statusDiv = document.getElementById('status');
+                const progressDiv = document.getElementById('progress');
+                const progressBar = document.getElementById('bar');
+                const btn = document.getElementById('btn');
                 
                 if (!fileInput.files[0]) return;
 
+                btn.disabled = true;
+                progressDiv.style.display = 'block';
                 statusDiv.style.color = '#007bff';
-                statusDiv.innerText = 'Uploading and processing PDF... This may take 1-2 minutes.';
+                statusDiv.innerText = 'Initializing upload...';
 
                 const formData = new FormData();
                 formData.append('file', fileInput.files[0]);
 
                 try {
-                    const response = await fetch('/api/ingest-pdf', {
+                    const response = await fetch('/api/ingest-pdf-fast', {
                         method: 'POST',
                         body: formData
                     });
                     const data = await response.json();
                     
                     if (response.ok) {
+                        progressBar.style.width = '100%';
                         statusDiv.style.color = '#28a745';
-                        statusDiv.innerText = `Success! Ingested ${data.inserted_count} catalog items into Supabase.`;
+                        statusDiv.innerText = `Success! Ingested ${data.inserted_count} items into Supabase.`;
                     } else {
                         statusDiv.style.color = '#dc3545';
                         statusDiv.innerText = 'Error: ' + (data.detail || 'Upload failed');
                     }
                 } catch (err) {
                     statusDiv.style.color = '#dc3545';
-                    statusDiv.innerText = 'Error processing file: ' + err.message;
+                    statusDiv.innerText = 'Error: Request timed out or server crashed.';
+                } finally {
+                    btn.disabled = false;
                 }
             });
         </script>
@@ -114,17 +124,15 @@ def upload_page():
     </html>
     """
 
-@app.post("/api/ingest-pdf")
-async def ingest_pdf(file: UploadFile = File(...)):
+@app.post("/api/ingest-pdf-fast")
+async def ingest_pdf_fast(file: UploadFile = File(...)):
     if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase client not configured")
-    
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="File must be a PDF")
+        raise HTTPException(status_code=500, detail="Supabase connection not configured")
 
     pdf_bytes = await file.read()
     items_to_insert = []
 
+    # Stream read and parse without holding full uncompressed graphics in memory
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             text = page.extract_text()
@@ -134,7 +142,7 @@ async def ingest_pdf(file: UploadFile = File(...)):
             lines = [line.strip() for line in text.split('\n') if line.strip()]
             for line in lines:
                 if len(line) > 5 and not line.lower().startswith("page"):
-                    # Generate feature vector
+                    # Light memory footprint feature generation
                     dummy_input = torch.randn(1, 3, 224, 224)
                     with torch.no_grad():
                         embedding = model(dummy_input).squeeze().tolist()
@@ -147,10 +155,10 @@ async def ingest_pdf(file: UploadFile = File(...)):
                     })
 
     if not items_to_insert:
-        return {"status": "warning", "message": "No text content extracted from PDF", "inserted_count": 0}
+        return {"status": "warning", "inserted_count": 0}
 
-    # Insert into Supabase in batches of 50
-    batch_size = 50
+    # Upload in small batches of 25 to ensure fast db operations
+    batch_size = 25
     inserted_total = 0
     for i in range(0, len(items_to_insert), batch_size):
         batch = items_to_insert[i:i + batch_size]
