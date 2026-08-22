@@ -1,11 +1,11 @@
---index-url https://download.pytorch.org/whl/cpu
---extra-index-url https://pypi.org/simple
-fastapi>=0.110.0
-uvicorn>=0.28.0
-asyncpg>=0.29.0
-pillow>=10.3.0
-torch
-torchvision
-python-multipart>=0.0.9
-pypdfium2
+fastapi
+uvicorn
+python-multipart
 supabase
+pypdfium2
+pillow
+torch
+transformers
+ftfy
+regex
+tqdm
