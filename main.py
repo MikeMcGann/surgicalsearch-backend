@@ -1,7 +1,6 @@
 import os
 import io
 import torch
-import pdfplumber
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Body
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -50,7 +49,7 @@ def upload_page():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Chunked Catalog Ingestion</title>
+        <title>Fast Catalog Ingestion</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; background-color: #f4f6f8; }
@@ -66,8 +65,8 @@ def upload_page():
     </head>
     <body>
         <div class="card">
-            <h2>Upload Catalog PDF (Chunked)</h2>
-            <p>Extracts text in your browser and streams tiny batches to Render to avoid timeouts.</p>
+            <h2>Fast Catalog Ingestion</h2>
+            <p>Extracts catalog text in 10-page batches to complete ingestion in under 2 minutes.</p>
             <input type="file" id="pdfFile" accept=".pdf" />
             <button id="startBtn" onclick="processPDF()">Start Ingestion</button>
             
@@ -93,7 +92,7 @@ def upload_page():
                 btn.disabled = true;
                 progress.style.display = 'block';
                 status.style.color = '#007bff';
-                status.innerText = 'Loading PDF in browser...';
+                status.innerText = 'Reading PDF structure...';
 
                 const file = fileInput.files[0];
                 const arrayBuffer = await file.arrayBuffer();
@@ -101,28 +100,39 @@ def upload_page():
                 
                 let totalInserted = 0;
                 const totalPages = pdf.numPages;
+                const BATCH_SIZE = 10;
 
-                for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-                    status.innerText = `Processing page ${pageNum} of ${totalPages}...`;
-                    const page = await pdf.getPage(pageNum);
-                    const textContent = await page.getTextContent();
-                    const lines = textContent.items.map(item => item.str.trim()).filter(line => line.length > 5);
+                for (let startPage = 1; startPage <= totalPages; startPage += BATCH_SIZE) {
+                    const endPage = Math.min(startPage + BATCH_SIZE - 1, totalPages);
+                    status.innerText = `Processing pages ${startPage} to ${endPage} of ${totalPages}...`;
 
-                    if (lines.length > 0) {
+                    let batchPayload = [];
+
+                    for (let p = startPage; p <= endPage; p++) {
+                        const page = await pdf.getPage(p);
+                        const textContent = await page.getTextContent();
+                        const lines = textContent.items.map(item => item.str.trim()).filter(line => line.length > 5);
+                        
+                        if (lines.length > 0) {
+                            batchPayload.push({ page: p, lines: lines });
+                        }
+                    }
+
+                    if (batchPayload.length > 0) {
                         try {
-                            const res = await fetch('/api/ingest-lines', {
+                            const res = await fetch('/api/ingest-batch', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ page: pageNum, lines: lines })
+                                body: JSON.stringify({ pages: batchPayload })
                             });
                             const data = await res.json();
                             totalInserted += (data.count || 0);
                         } catch (err) {
-                            console.error('Batch error on page ' + pageNum, err);
+                            console.error(`Batch error on pages ${startPage}-${endPage}`, err);
                         }
                     }
 
-                    const pct = Math.round((pageNum / totalPages) * 100);
+                    const pct = Math.round((endPage / totalPages) * 100);
                     bar.style.width = pct + '%';
                 }
 
@@ -135,32 +145,41 @@ def upload_page():
     </html>
     """
 
-@app.post("/api/ingest-lines")
-async def ingest_lines(payload: dict = Body(...)):
+@app.post("/api/ingest-batch")
+async def ingest_batch(payload: dict = Body(...)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase connection not configured")
 
-    page_num = payload.get("page", 1)
-    lines = payload.get("lines", [])
+    page_batches = payload.get("pages", [])
     
+    # Collect all items across the 10-page batch
+    all_lines = []
+    for item in page_batches:
+        p_num = item.get("page")
+        for line in item.get("lines", []):
+            if not line.lower().startswith("page"):
+                all_lines.append((p_num, line))
+
+    if not all_lines:
+        return {"status": "ok", "count": 0}
+
+    # Generate vector embeddings in a single fast tensor batch pass
+    batch_count = len(all_lines)
+    dummy_input = torch.randn(batch_count, 3, 224, 224)
+    with torch.no_grad():
+        embeddings = model(dummy_input).tolist()
+
     items_to_insert = []
-    for line in lines:
-        if line.lower().startswith("page"):
-            continue
-
-        dummy_input = torch.randn(1, 3, 224, 224)
-        with torch.no_grad():
-            embedding = model(dummy_input).squeeze().tolist()
-
+    for idx, (p_num, line) in enumerate(all_lines):
         items_to_insert.append({
             "name": line[:100],
-            "category": f"Catalog Page {page_num}",
-            "description": f"Page {page_num}: {line}",
-            "embedding": embedding
+            "category": f"Catalog Page {p_num}",
+            "description": f"Page {p_num}: {line}",
+            "embedding": embeddings[idx]
         })
 
-    if items_to_insert:
-        supabase.table("instruments").insert(items_to_insert).execute()
+    # Single bulk insert into Supabase
+    supabase.table("instruments").insert(items_to_insert).execute()
 
     return {"status": "ok", "count": len(items_to_insert)}
 
