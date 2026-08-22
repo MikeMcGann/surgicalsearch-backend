@@ -56,10 +56,11 @@ def process_pdf_catalog(pdf_file_path: str):
         img_bytes = img_byte_arr.getvalue()
 
         file_path = f"page_{page_num}.jpg"
-        supabase.storage.from_(BUCKET_NAME).upload(
-            path=file_path,
-            file=img_bytes,
-            file_options={"content-type": "image/jpeg", "upsert": True}
+    supabase.storage.from_(BUCKET_NAME).upload(
+    path=file_path,
+    file=img_bytes,
+    file_options={"content-type": "image/jpeg", "x-upsert": "true"}
+)
         )
 
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{file_path}"
