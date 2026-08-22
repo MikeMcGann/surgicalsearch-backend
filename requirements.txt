@@ -9,3 +9,4 @@ transformers
 ftfy
 regex
 tqdm
+asyncpg
