@@ -21,12 +21,14 @@ app.add_middleware(
 # Supabase database initialization
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL else None
+
+# Only initialize client if BOTH credentials are present
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 
 # Initialize MobileNetV3 model for embedding extraction
 weights = models.MobileNet_V3_Small_Weights.DEFAULT
 model = models.mobilenet_v3_small(weights=weights)
-model.classifier = torch.nn.Identity()  # Strip classifier to output raw feature embeddings
+model.classifier = torch.nn.Identity()  # Output raw feature embeddings
 model.eval()
 
 transform = transforms.Compose([
@@ -45,7 +47,7 @@ def root():
 @app.get("/search")
 def search_text(q: str = Query("", alias="q"), category: str = "All"):
     if not supabase:
-        return {"results": [{"title": "Demo Instrument", "description": "Configure SUPABASE_URL in Render env vars."}]}
+        return {"results": [{"title": "Demo Instrument", "description": "Ensure SUPABASE_URL and SUPABASE_KEY are set in Render."}]}
 
     query = supabase.table("instruments").select("*")
     if q:
@@ -73,10 +75,15 @@ async def search_visual(file: UploadFile = File(...)):
         return {
             "results": [{
                 "title": "Visual Match (Demo)",
-                "description": "PyTorch embedding generated successfully. Add SUPABASE_URL to search database."
+                "description": "PyTorch embedding generated successfully. Add SUPABASE_KEY to search database."
             }]
         }
 
     # Match vector embedding using RPC function in Supabase
-    rpc_response = supabase.rpc("match_instruments", {"query_embedding": embedding, "match_threshold": 0.5, "match_count": 5}).execute()
+    rpc_response = supabase.rpc("match_instruments", {
+        "query_embedding": embedding, 
+        "match_threshold": 0.5, 
+        "match_count": 5
+    }).execute()
+    
     return {"results": rpc_response.data}
