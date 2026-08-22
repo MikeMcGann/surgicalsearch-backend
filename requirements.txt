@@ -1,11 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
 fastapi
 uvicorn
 python-multipart
 supabase
 pypdfium2
 pillow
-torch
-torchvision
 transformers
 ftfy
 regex
