@@ -7,3 +7,5 @@ pillow>=10.3.0
 torch
 torchvision
 python-multipart>=0.0.9
+pypdfium2
+supabase
