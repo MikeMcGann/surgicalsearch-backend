@@ -5,6 +5,7 @@ supabase
 pypdfium2
 pillow
 torch
+torchvision
 transformers
 ftfy
 regex
