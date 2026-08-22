@@ -88,6 +88,9 @@ def generate_image_embedding(image_bytes: bytes) -> list[float]:
     return features_512.cpu().numpy().flatten().tolist()
 
 @app.post("/api/search-visual")
+@app.get("/search")
+def search_text(q: str = "", category: str = "All"):
+    # Keep your existing code inside this function
 async def search_visual(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image.")
