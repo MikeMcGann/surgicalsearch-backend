@@ -18,12 +18,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Supabase database initialization
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+# Safely extract and clean environment variables
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip('/')
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 
-# Only initialize client if BOTH credentials are present
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
+supabase: Client = None
+
+# Only attempt connection if SUPABASE_URL starts with http:// or https://
+if SUPABASE_URL.startswith(("http://", "https://")) and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Supabase connection warning: {e}")
+        supabase = None
 
 # Initialize MobileNetV3 model for embedding extraction
 weights = models.MobileNet_V3_Small_Weights.DEFAULT
@@ -47,7 +54,7 @@ def root():
 @app.get("/search")
 def search_text(q: str = Query("", alias="q"), category: str = "All"):
     if not supabase:
-        return {"results": [{"title": "Demo Instrument", "description": "Ensure SUPABASE_URL and SUPABASE_KEY are set in Render."}]}
+        return {"results": [{"title": "Demo Instrument", "description": "Ensure SUPABASE_URL starts with https:// in Render environment settings."}]}
 
     query = supabase.table("instruments").select("*")
     if q:
@@ -62,11 +69,9 @@ def search_text(q: str = Query("", alias="q"), category: str = "All"):
 # 2. Visual Image Search Endpoint
 @app.post("/api/search-visual")
 async def search_visual(file: UploadFile = File(...)):
-    # Read uploaded image bytes
     image_bytes = await file.read()
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-    # Generate PyTorch embedding vector
     input_tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
         embedding = model(input_tensor).squeeze().tolist()
@@ -75,11 +80,10 @@ async def search_visual(file: UploadFile = File(...)):
         return {
             "results": [{
                 "title": "Visual Match (Demo)",
-                "description": "PyTorch embedding generated successfully. Add SUPABASE_KEY to search database."
+                "description": "PyTorch embedding generated successfully. Check SUPABASE_URL format in Render."
             }]
         }
 
-    # Match vector embedding using RPC function in Supabase
     rpc_response = supabase.rpc("match_instruments", {
         "query_embedding": embedding, 
         "match_threshold": 0.5, 
